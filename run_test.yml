@@ -1,0 +1,163 @@
+# Manual run tests with chosen parameters
+name: Run tests 
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_env:
+        description: "TEST_ENV"
+        required: true
+        default: "demo"
+        type: choice
+        options: [demo, live, fb]
+
+      channel:
+        description: "CHANNEL"
+        required: true
+        default: "api"
+        type: choice
+        options: [web, api]
+
+      tags:
+        description: "TAGS (Cucumber tags expression)"
+        required: true
+        default: "@login and not @pending"
+        type: string
+
+      parallel_thread_count:
+        description: "PARALLEL_THREAD_COUNT"
+        required: true
+        default: "25"
+        type: choice
+        options: ["25", "20", "15", "10", "5", "1"]
+
+      if_rerun:
+        description: "IF_RERUN (rerun failed cases)"
+        required: true
+        default: true
+        type: boolean
+
+      report_plugin:
+        description: "REPORT_PLUGIN"
+        required: true
+        default: "reportportal"
+        type: choice
+        options: ["extentreports", "reportportal"]
+
+      console_log:
+        description: "CONSOLE_LOG"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+      slack_id:
+        description: "SLACK_ID"
+        required: false
+        default: "C068BS6G6L9"
+        type: string
+
+      aws_build:
+        description: "AWS_BUILD (code pipeline name or false)"
+        required: false
+        default: "false"
+        type: string
+
+      tenant:
+        description: "TENANT"
+        required: true
+        default: "atfonline"
+        type: string
+
+      runmode:
+        description: "RUNMODE"
+        required: true
+        default: "hub"
+        type: choice
+        options: ["hub", "local"]
+
+      browser:
+        description: "BROWSER"
+        required: true
+        default: "chrome"
+        type: choice
+        options: ["chrome", "firefox"]
+
+env:
+  JAVA_VERSION: "11"
+
+jobs:
+  test:
+    name: Run tests (${{ inputs.test_env }} / ${{ inputs.channel }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK (with Maven cache)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: "maven"
+
+      - name: Run Maven tests 
+        shell: bash
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          JOB_NAME: ${{ github.workflow }}
+        run: |
+          set -euo pipefail
+
+          # Jenkins: rp.launch = first "@tag" without "@"
+          RP_LAUNCH="$(echo "${{ inputs.tags }}" | grep -o '@[^ ]*' | head -1 | tr -d '@' || true)"
+          if [[ -z "${RP_LAUNCH}" ]]; then
+            RP_LAUNCH="manual"
+          fi
+
+          mvn --no-transfer-progress -B clean test \
+            -Dcourgette.vmoptions="-Xms256m -Xmx2048m" \
+            -Dcourgette.threads="${{ inputs.parallel_thread_count }}" \
+            -Dcourgette.plugin="${{ inputs.report_plugin }}" \
+            -Dcourgette.rerunFailedScenarios="${{ inputs.if_rerun }}" \
+            -Dcourgette.rerunAttempts=1 \
+            -Dcucumber.tags="${{ inputs.tags }}" \
+            -DRUNMODE="${{ inputs.runmode }}" \
+            -DBROWSER="${{ inputs.browser }}" \
+            -DTENANT="${{ inputs.tenant }}" \
+            -DENV="${{ inputs.test_env }}" \
+            -DCHANNEL="${{ inputs.channel }}" \
+            -DFB_BRANCH="" \
+            -DLOG=false \
+            -DCONSOLE_LOG="${{ inputs.console_log }}" \
+            -DBUILD_NUMBER="${BUILD_NUMBER}" \
+            -DSLACK_ID="${{ inputs.slack_id }}" \
+            -DAWS_BUILD="${{ inputs.aws_build }}" \
+            -DPARALLEL_RUN=true \
+            -DJOB_NAME="${JOB_NAME}" \
+            -Drp.launch="${RP_LAUNCH}" \
+            -Drp.attributes="suite:regression;build:${BUILD_NUMBER}"
+
+      - name: Zip output (test_results.zip)
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d "output" ]; then
+            zip -r test_results.zip output/
+          else
+            echo "Output directory not found, skipping zip."
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ inputs.test_env }}-${{ inputs.channel }}-${{ github.run_number }}
+          path: |
+            test_results.zip
+            output/
+            target/surefire-reports/
+          if-no-files-found: ignore
