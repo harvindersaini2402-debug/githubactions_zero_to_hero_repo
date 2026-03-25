@@ -6,9 +6,10 @@ jobs:
   deploy:
     env:
         DOCKERHUB_USER: ${{ vars.DOCKERHUB_USER }}
+        DOCKER_TAG: ${{ github.sha }}
     runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Deploy with docker compose
-        run: docker compose down && docker compose up -d --build --force-recreate
+        run: docker compose down && docker compose up -d --build --force-recreate --pull always
